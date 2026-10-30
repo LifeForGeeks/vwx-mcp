@@ -9,6 +9,7 @@
 #include "StdAfx.h"
 
 #include "Bridge/VwxBridgePalette.h"
+#include "Bridge/VMNativeFunctions.h"
 
 const char * DefaultPluginVWRIdentifier() { return "VwxBridge"; }
 
@@ -31,6 +32,7 @@ extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_main(Sint32 action, void* modu
 	REGISTER_Extension<VwxBridge::CExtVwxBridgePalette>( GROUPID_ExtensionWebPalettes, action, moduleInfo, iid, inOutInterface, cbp, reply );
 	REGISTER_Extension<VwxBridge::CExtMenuShowVwxBridge>( GROUPID_ExtensionMenu, action, moduleInfo, iid, inOutInterface, cbp, reply );
 	REGISTER_Extension<VwxBridge::CExtMenuVwxPump>( GROUPID_ExtensionMenu, action, moduleInfo, iid, inOutInterface, cbp, reply );
+	REGISTER_Extension<VwxBridge::CExtVMNativeFunctions>( GROUPID_ExtensionVSFunctions, action, moduleInfo, iid, inOutInterface, cbp, reply );
 
 	return reply;
 }

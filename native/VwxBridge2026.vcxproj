@@ -47,6 +47,7 @@
       <TypeLibraryName>$(IntDir)$(TargetName).tlb</TypeLibraryName>
     </Midl>
     <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <Optimization>MaxSpeed</Optimization>
       <AdditionalIncludeDirectories>.\Source\Prefix;.\Source;$(VWSDK2026)\SDKLib\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>NDEBUG;WIN32;_WINDOWS;_USRDLL;_WIN_EXTERNAL_;RELEASE_BLD;_WINDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -92,11 +93,13 @@ set VWR_7ZCMD=$(VWSDK2026)\SDKLib\ToolsWin\BuildVWR\7z
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="Source\Bridge\VwxBridgePalette.cpp" />
+    <ClCompile Include="Source\Bridge\VMNativeFunctions.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\Prefix\CommonPrefix.h" />
     <ClInclude Include="Source\Prefix\StdAfx.h" />
     <ClInclude Include="Source\Bridge\VwxBridgePalette.h" />
+    <ClInclude Include="Source\Bridge\VMNativeFunctions.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

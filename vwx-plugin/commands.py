@@ -146,14 +146,24 @@ def get_document_info(p):
     }
 
 def save_document(p):
-    # VW2026: no SaveDocument. Drive the Save menu command (keeps path/format).
-    _safe(lambda: vs.DoMenuTextByName('Save', 0))
-    return {'status': 'ok'}
+    path = vs.GetFPathName()
+    if not path:
+        return {'error': 'No saved document path; use save_document_as'}
+    result = vs.SaveActiveDocument(path)
+    if result != 0 or not os.path.isfile(path):
+        return {'error': 'Native save failed', 'code': result, 'path': path}
+    return {'status': 'ok', 'path': path, 'bytes': os.path.getsize(path)}
 
 def save_document_as(p):
     path = p.get('path', '')
+    if not path:
+        return {'error': 'A destination path is required'}
     try:
-        vs.SaveActiveDocument(path, True)
+        # VW2026 SDK: SaveActiveDocument(filePath) -> LONGINT; 0 is success.
+        result = vs.SaveActiveDocument(path)
+        if result != 0:
+            return {'error': 'SaveActiveDocument failed', 'code': result,
+                    'path': path}
         return {'status': 'ok', 'path': path}
     except Exception as e:
         return {'error': str(e)}
@@ -282,7 +292,7 @@ def get_classes(p):
     count = vs.ClassNum()
     classes = []
     for i in range(1, count + 1):
-        n = _safe(lambda: vs.GetClName(i), f'Class_{i}')
+        n = vs.ClassList(i)
         classes.append({
             'name': n, 'index': i,
             'visible': _safe(lambda: vs.GetCVis(n) == 0),
@@ -642,7 +652,7 @@ def draw_dimension(p):
         # VW2026: no LinDimN. LinearDim(start, end, offset, dimType, arrow, textFlag, textOffset)
         vs.LinearDim((p.get('x1',0), p.get('y1',0)),
                      (p.get('x2',100), p.get('y2',0)),
-                     p.get('offset', 20), 1, 0, 0, 0.0)
+                     p.get('offset', 20), 4, 769, 1025, 0.0)
         return _newobj_result(p)
     finally:
         _restore(prev)
@@ -2979,26 +2989,31 @@ def get_pio_path(p):
 
 # ── Dimensions ───────────────────────────────────────────────────────────────
 
+def _linear_dim_type(value):
+    value = int(value)
+    value = {771: 4, 772: 0, 773: 1}.get(value, value)
+    if value not in (0, 1, 4):
+        raise ValueError('dim_type must be 0 horizontal, 1 vertical, or 4 aligned')
+    return value
+
+
 def create_linear_dimension(p):
     """Create a linear dimension between two points.
 
-    Gotcha: vs.LinearDim's offsetDistance argument is the text offset ALONG the
-    dim line, not a perpendicular offset from the measured object. To center
-    the text on the dim line (no perpendicular displacement), pass
-    zero_text_perp=True — sets OV 43 = 0 then ResetObject.
-
-    dim_type: 771 aligned, 772 horizontal, 773 vertical (VW enum).
+    offset is the perpendicular dimension-line distance. Native dim_type is
+    0 horizontal, 1 vertical, 4 aligned. Old MCP values 771/772/773 are mapped
+    for compatibility. Text offset along the line is independently zero.
     Pass associate_to=<uuid> to bind the dim to an object (AssociateLinearDimension)."""
     prev = _with_layer_class(p)
     try:
         p1 = (float(p.get('x1', 0)), float(p.get('y1', 0)))
         p2 = (float(p.get('x2', 100)), float(p.get('y2', 0)))
         offset = float(p.get('offset', 0))
-        dim_type = int(p.get('dim_type', 771))
-        arrow = int(p.get('arrow', 770))
-        text_flag = int(p.get('text_flag', 0))
+        dim_type = _linear_dim_type(p.get('dim_type', 4))
+        arrow = int(p.get('arrow', 769))
+        text_flag = int(p.get('text_flag', 1025))
         try:
-            vs.LinearDim(p1, p2, offset, dim_type, arrow, text_flag, offset)
+            vs.LinearDim(p1, p2, offset, dim_type, arrow, text_flag, 0.0)
         except Exception as e:
             return {'error': str(e)}
         h = vs.LNewObj()
@@ -3674,15 +3689,15 @@ def set_component_texture(p):
 
 # ── Viewport Class / Layer Overrides ─────────────────────────────────────────
 
-def _vp_cl_props(h):
+def _vp_cl_props(h, cls):
     return {
-        'fill_back':  _safe(lambda: vs.GetVPClOvrdFillBack(h)),
-        'fill_fore':  _safe(lambda: vs.GetVPClOvrdFillFore(h)),
-        'fill_style': _safe(lambda: vs.GetVPClOvrdFillStyle(h)),
-        'pen_back':   _safe(lambda: vs.GetVPClOvrdPenBack(h)),
-        'pen_fore':   _safe(lambda: vs.GetVPClOvrdPenFore(h)),
-        'fill_opacity': _safe(lambda: vs.GetVPClOvrdFillOpty(h)),
-        'pen_opacity':  _safe(lambda: vs.GetVPClOvrdPenOpty(h)),
+        'fill_back':  vs.GetVPClOvrdFillBack(h, cls),
+        'fill_fore':  vs.GetVPClOvrdFillFore(h, cls),
+        'fill_style': vs.GetVPClOvrdFillStyle(h, cls),
+        'pen_back':   vs.GetVPClOvrdPenBack(h, cls),
+        'pen_fore':   vs.GetVPClOvrdPenFore(h, cls),
+        'fill_opacity': vs.GetVPClOvrdFillOpty(h, cls),
+        'pen_opacity': vs.GetVPClOvrdPenOpty(h, cls),
     }
 
 def add_vp_class_override(p):
@@ -3691,29 +3706,24 @@ def add_vp_class_override(p):
     cls = p.get('class_name')
     if not cls: return {'error': 'class_name required'}
     try:
-        ovrd = vs.CreateVPClOvrd(vp, cls)
-        if not ovrd: return {'error': 'CreateVPClOvrd failed'}
-        if p.get('fill_fore_rgb'):
-            r, g, b = p['fill_fore_rgb']
-            vs.SetVPClOvrdFillFore(ovrd, (_c8(r), _c8(g), _c8(b)))
-        if p.get('fill_back_rgb'):
-            r, g, b = p['fill_back_rgb']
-            vs.SetVPClOvrdFillBack(ovrd, (_c8(r), _c8(g), _c8(b)))
-        if p.get('pen_fore_rgb'):
-            r, g, b = p['pen_fore_rgb']
-            vs.SetVPClOvrdPenFore(ovrd, (_c8(r), _c8(g), _c8(b)))
-        if p.get('pen_back_rgb'):
-            r, g, b = p['pen_back_rgb']
-            vs.SetVPClOvrdPenBack(ovrd, (_c8(r), _c8(g), _c8(b)))
+        if vs.GetTypeN(vp) != 122 or not vs.GetObject(cls):
+            return {'error': 'Existing viewport and class required'}
+        colors = {'fill_fore_rgb': vs.SetVPClOvrdFillFore, 'fill_back_rgb': vs.SetVPClOvrdFillBack,
+                  'pen_fore_rgb': vs.SetVPClOvrdPenFore, 'pen_back_rgb': vs.SetVPClOvrdPenBack}
+        for key in colors:
+            if p.get(key) is not None and (len(p[key]) != 3 or any(not 0 <= x <= 255 for x in p[key])):
+                return {'error': 'RGB values must contain three components in 0..255'}
+        vs.CreateVPClOvrd(vp, cls)  # Returns None; override is identified by viewport + class.
+        for key, setter in colors.items():
+            if p.get(key) is not None: setter(vp, cls, *[_c8(x) for x in p[key]])
         if p.get('fill_opacity') is not None:
-            vs.SetVPClOvrdFillOpty(ovrd, int(p['fill_opacity']))
+            vs.SetVPClOvrdFillOpty(vp, cls, int(p['fill_opacity']))
         if p.get('pen_opacity') is not None:
-            vs.SetVPClOvrdPenOpty(ovrd, int(p['pen_opacity']))
+            vs.SetVPClOvrdPenOpty(vp, cls, int(p['pen_opacity']))
         if p.get('fill_style') is not None:
-            vs.SetVPClOvrdFillStyle(ovrd, int(p['fill_style']))
-        try: vs.UpdateVP(vp)
-        except Exception: pass
-        return {'status': 'ok', 'override_id': _oid(ovrd)}
+            vs.SetVPClOvrdFillStyle(vp, cls, int(p['fill_style']))
+        vs.UpdateVP(vp)
+        return {'status': 'ok', 'viewport_id': _oid(vp), 'class': cls, 'properties': _vp_cl_props(vp, cls)}
     except Exception as e:
         return {'error': str(e)}
 
@@ -3735,12 +3745,11 @@ def list_vp_class_overrides(p):
     except Exception as e:
         return {'error': str(e)}
     out = []
-    # No direct iterator — VW returns handles via a per-index function
-    for i in range(1, (n or 0) + 1):
-        oh = _safe(lambda i=i: vs.GetVPClOvrdByIndex(vp, i))
-        if not oh: continue
-        entry = {'index': i, 'class': _safe(lambda: vs.GetVPClOvrdName(oh))}
-        entry.update(_vp_cl_props(oh))
+    for i in range(n or 0):
+        cls = vs.GetVPClOvrdName(vp, i)
+        if not cls: continue
+        entry = {'index': i, 'class': cls}
+        entry.update(_vp_cl_props(vp, cls))
         out.append(entry)
     return {'count': n, 'overrides': out}
 
@@ -3885,6 +3894,8 @@ def vs_index_stats(p):
 def _batch(p):
     """Run several commands in one round-trip (all on VW main thread, serial).
     calls: [{command, params}, ...]. Returns results in order."""
+    if any(c.get('command') in ('create_native_objects', 'finalize_native_objects', 'create_cable_paths', 'create_distributors', 'create_stage_deck_grid', 'set_lighting_documentation', 'number_lighting_devices', 'assign_gdtf_file') for c in p.get('calls') or []):
+        return {'error': 'Native creation requires separate host regeneration events. Call the creation workflow directly; its items list already supports batching.', 'code': 'VM_EVENT_BOUNDARY_REQUIRED'}
     results = []
     for call in p.get('calls') or []:
         name = call.get('command')
@@ -4401,3 +4412,10 @@ def set_object_style(p):
     if not h: return {'error': 'Object not found'}
     r = vs.SetPluginStyle(h, p.get('style', ''))
     return {'status': 'ok', 'result': str(r), 'style_now': _safe(lambda: vs.GetPluginStyle(h), '')}
+
+
+# Velvet Mirror workflows stay modular and are hot-reloaded with this dispatcher.
+import importlib as _workflow_importlib
+import entertainment as _entertainment
+_workflow_importlib.reload(_entertainment)
+globals().update(_entertainment.COMMANDS)

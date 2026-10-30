@@ -61,6 +61,22 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, '..', 'vwx-plugin', 'vs_index.json')
     idx = build(vs_path)
+    # Official current scripting reference includes plug-in functions absent
+    # from the bundled SDK completion stub. Keep source URLs with the entries.
+    with open(os.path.join(here, 'vs_supplement.json'), encoding='utf-8') as f:
+        idx.update(json.load(f))
+    # The SDK stub has stale part-index prose. Keep verified native behavior
+    # when rebuilding so agents do not read empty data or write every accessory.
+    for name in ('LDevice_GetParamStr', 'LDevice_GetParamLong'):
+        if name in idx:
+            idx[name]['doc'] = ('Read a typed Lighting Device/cell/accessory parameter. '
+                'Use cellIndex>=0. accessoryIndex=-2 reads the parent cell; >=0 reads that accessory. '
+                '-1 is unsupported for Get. Official Vectorworks/developer-scripting reference; verified VW2026.')
+    for name in ('LDevice_SetParamStr', 'LDevice_SetParamLong'):
+        if name in idx:
+            idx[name]['doc'] = ('Write a typed Lighting Device/cell/accessory parameter. '
+                'accessoryIndex=-2 targets the parent cell; >=0 targets that accessory; -1 writes ALL accessories. '
+                'cellIndex=-1 writes ALL cells. Official Vectorworks/developer-scripting reference.')
     with open(out, 'w', encoding='utf-8') as f:
         json.dump(idx, f, ensure_ascii=False, separators=(',', ':'))
     cats = {}

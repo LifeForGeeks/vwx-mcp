@@ -134,6 +134,8 @@ def _readonly_manifest():
 
 
 def _is_readonly(cmd):
+    if cmd in {'get_entertainment_state', 'get_native_schema', 'get_lighting_patch_audit', 'list_native_library_resources', 'get_document_info'}:
+        return False  # Read-only data, but requires a genuine menu scripting context.
     names = _readonly_manifest()
     if names is not None:
         return cmd in names
@@ -156,7 +158,7 @@ def _get_commands():
     once."""
     import importlib, commands
     try:
-        mt = os.path.getmtime(os.path.join(_DIR, 'commands.py'))
+        mt = tuple(os.path.getmtime(os.path.join(_DIR, n)) for n in ('commands.py', 'entertainment.py'))
     except Exception:
         mt = 0.0
     if getattr(commands, '_vwx_loaded_mtime', None) != mt:
@@ -208,7 +210,11 @@ def _peek_cmd(fn):
     return cmd
 
 
+_yield_to_host = False
+
+
 def _claim_and_run(fn):
+    global _yield_to_host
     src  = os.path.join(_JOBS, fn)
     work = src + '.working'
     _peek_cache.pop(fn, None)
@@ -238,6 +244,11 @@ def _claim_and_run(fn):
         return True
     t0 = time.time()
     result = _dispatch(cmd, params)
+    if cmd in ('create_native_objects', 'finalize_native_objects', 'create_cable_paths', 'create_distributors',
+               'create_stage_deck_grid', 'set_lighting_documentation', 'number_lighting_devices', 'assign_gdtf_file'):
+        # These workflows need host-side PIO regeneration between native events.
+        # Do not consume their next job during this same scripting event.
+        _yield_to_host = True
     try:
         _write_json(rpath, result)
     except Exception as e:
@@ -302,6 +313,8 @@ def pump_readonly():
 
 def pump_all():
     """Drain EVERY job. Call ONLY from genuine command dispatch (DoInterface)."""
+    global _yield_to_host
+    _yield_to_host = False
     _housekeep()
     _log("pump_all: genuine dispatch — draining everything")
     done = 0
@@ -319,6 +332,9 @@ def pump_all():
         for fn in jobs:
             if _claim_and_run(fn):
                 ran += 1
+                if _yield_to_host:
+                    _log('pump_all: yielding to host for native object regeneration')
+                    return
         done += ran
         if ran == 0:
             break

@@ -1,3 +1,7 @@
+# Velvet Mirror Vectorworks MCP
+
+This checkout is the **Velvet Mirror** entertainment-drafting fork. See [our toolkit documentation](README-VM.md) for the additional native workflows, reliability fixes, installation and validation. The original upstream documentation follows; the MIT license is retained.
+
 # vwx-mcp
 
 **Vectorworks 2026 MCP server — 248 tools + a 3071-function `vs.*` knowledge index, true background control (bridge v13).**

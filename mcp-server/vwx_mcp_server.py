@@ -190,10 +190,10 @@ class VwxFileTransport:
         context, against a document that has moved on.
         """
         try:
-            if os.path.exists(job_path):
-                os.remove(job_path)
+            os.remove(job_path)
+            return True
         except Exception:
-            pass
+            return False  # Includes a simultaneous claim: never call that safe to retry.
 
     def _read_result(self, cid):
         rp = os.path.join(self.results, cid + '.json')
@@ -204,23 +204,25 @@ class VwxFileTransport:
                 result = json.load(f)
         except Exception:
             return None      # writer may be mid-replace; retry next poll
-        try:
-            os.remove(rp)
-        except Exception:
-            pass
+        # Keep completed results for repeatable recovery/status reads. The pump
+        # already expires old result files; consuming them made a second poll
+        # indistinguishable from a lost or still-running mutation.
         return result
 
     def send_command(self, command_type, params=None):
         cid = uuid.uuid4().hex[:12]
         t0 = time.perf_counter()
         # 'poll' (async retrieval): just look for the result file.
-        if command_type == 'poll':
+        if command_type in ('poll', 'get_bridge_job_status'):
             pcid = str((params or {}).get('cid', ''))
+            if not pcid or len(pcid) > 64 or any(c not in '0123456789abcdefABCDEF-' for c in pcid):
+                return {'error': 'Invalid job correlation ID', 'code': 'INVALID_CID'}
             result = self._read_result(pcid)
             if result is not None:
                 return {'status': 'done', 'cid': pcid, 'result': result}
-            return {'status': 'pending', 'cid': pcid,
-                    'note': 'file transport: result not written yet'}
+            queued = any(n.endswith('-'+pcid+'.json') for n in os.listdir(self.jobs))
+            return {'status': 'queued' if queued else 'unknown_or_running', 'cid': pcid,
+                    'retry_safe': False, 'note': 'No retained result. Do not resubmit a mutation; inspect the active document or poll again.'}
         job = {'type': command_type, 'params': params or {}, '_cid': cid,
                'ts': time.time()}
         jp = os.path.join(self.jobs, '%013d-%s.json' % (time.time() * 1000, cid))
@@ -240,28 +242,36 @@ class VwxFileTransport:
                 logger.info(f"tool={command_type} cid={cid} ms={ms:.0f} "
                             f"status={status} transport=file")
                 return result
+            # The native pump removes a job as soon as it claims it. Long
+            # native work blocks the UI timer/heartbeat. A missing queue entry
+            # means execution may have started, NOT that the bridge is down.
+            if not os.path.exists(jp):
+                time.sleep(0.03)
+                continue
             # Fail fast on a bridge that is not running rather than burning the
             # whole (now long) timeout on a queue nobody is draining.
             alive, paused, age = self.bridge_state()
             if alive:
                 dead_since = None
                 if paused:
-                    self._discard(jp)
+                    if not self._discard(jp):
+                        continue
                     return {'error': "the VWX Bridge palette is PAUSED — press "
                                      "Resume in the palette, then retry.",
-                            'cid': cid, 'code': 'VW_BRIDGE_PAUSED'}
+                            'cid': cid, 'code': 'VW_BRIDGE_PAUSED', 'retry_safe': True}
             else:
                 now = time.monotonic()
                 dead_since = dead_since or now
                 if now - dead_since > VWX_ALIVE_GRACE:
-                    self._discard(jp)
+                    if not self._discard(jp):
+                        continue
                     seen = ("never" if age == float('inf')
                             else f"{age:.0f}s ago")
                     return {'error': "the VWX Bridge palette is not running "
                                      f"(last heartbeat: {seen}), so nothing is "
                                      "draining the job queue. Open the VWX "
                                      "Bridge palette in Vectorworks and retry.",
-                            'cid': cid, 'code': 'VW_BRIDGE_DOWN'}
+                            'cid': cid, 'code': 'VW_BRIDGE_DOWN', 'retry_safe': True}
             time.sleep(0.03)
         # Timed out. Distinguish the two cases with a machine-readable code:
         # a job still sitting in the queue was never dispatched and is safe to
@@ -269,8 +279,7 @@ class VwxFileTransport:
         # retry would run a mutation twice. An opaque timeout cannot tell the
         # caller which of those it is.
         try:
-            if os.path.exists(jp):
-                os.remove(jp)
+            if self._discard(jp):
                 code = 'VW_JOB_UNCLAIMED'
                 hint = ("job was never picked up — is the VWX Bridge palette "
                         "open (bridge on) and Ctrl+Shift+B assigned to "
@@ -284,7 +293,8 @@ class VwxFileTransport:
             code, hint = 'VW_UNKNOWN', "unknown"
         logger.error(f"tool={command_type} cid={cid} status=timeout transport=file")
         return {'error': f"timed out after {VWX_SOCKET_TIMEOUT:.0f}s — {hint}",
-                'cid': cid, 'code': code}
+                'cid': cid, 'code': code, 'retry_safe': code == 'VW_JOB_UNCLAIMED',
+                'status_tool': 'get_bridge_job_status'}
 
 
 class VwxMCPServer:
@@ -453,8 +463,81 @@ def cmd(command_type, params=None):
     layer, class and plant names (Winkelstützen, Grünfläche) as real characters
     instead of \\uXXXX escapes, which is both shorter and readable.
     """
-    return json.dumps(get_vwx_connection().send_command(command_type, params),
-                      ensure_ascii=False, separators=(",", ":"))
+    if command_type in ('get_gdtf_file','get_mvr_gdtf_audit'):
+        from gdtf_files import dispatch
+        return json.dumps(dispatch(command_type,params or {}),ensure_ascii=False,separators=(',',':'))
+    if command_type == 'get_cable_parts_catalog':
+        from cable_parts_catalog import inspect_catalog
+        return json.dumps(inspect_catalog(params or {}), ensure_ascii=False, separators=(",", ":"))
+    connection = get_vwx_connection()
+    result = connection.send_command(command_type, params)
+    if command_type=='assign_gdtf_file' and result.get('requires_verification') and not result.get('error'):
+        followup={'expected_document':params['expected_document'],'receipt':result['receipt']}
+        try:final=connection.send_command('get_gdtf_assignment_verification',followup)
+        except Exception as exc:final={'error':str(exc)}
+        result['verification']=final
+        if final.get('error') or not final.get('verified'):
+            result.update(status='error',error='GDTF import attempted; verification incomplete. Inspect retained device.',
+                          retry_safe=False,recovery_command='get_gdtf_assignment_verification',recovery_params=followup)
+        else:
+            result['requires_verification']=False;result.pop('next_command',None)
+    if command_type in ('set_lighting_documentation','number_lighting_devices') and result.get('requires_verification') and not result.get('error'):
+        followup={'expected_document':params['expected_document'],'receipt':result['receipt']}
+        verify_command='get_lighting_documentation_verification'
+        try:
+            final=connection.send_command(verify_command,followup)
+        except Exception as exc:
+            final={'error':str(exc)}
+        result['verification']=final
+        if final.get('error') or not final.get('verified'):
+            result.update(status='error',error='Lighting edit attempted; verification incomplete. Inspect before retrying.',
+                          retry_safe=False,recovery_command=verify_command,recovery_params=followup)
+        else:
+            after={row['object_id']:row for row in final['devices']}
+            result['rollback_items']=[{'object_id':r['object_id'],'expected_fingerprint':after[r['object_id']]['fingerprint'],
+                'values':{k:r['before']['values'][k] for k in r['changes']}} for r in result['receipt'] if r['changes']]
+            result['requires_verification']=False
+            result.pop('next_command',None);result.pop('receipt',None)
+    if command_type == 'set_cable_sections' and result.get('requires_verification') and not result.get('error'):
+        followup = {'expected_document':params['expected_document'],'receipt':result['receipt']}
+        try:
+            final = connection.send_command('get_cable_section_verification', followup)
+        except Exception as exc:
+            final = {'error':str(exc)}
+        result['verification'] = final
+        if final.get('error') or not final.get('verified'):
+            result.update(status='error', error='Section edit attempted; verification incomplete. Inspect before retrying.',
+                          retry_safe=False, recovery_command='get_cable_section_verification', recovery_params=followup)
+        else:
+            result['requires_verification'] = False
+            result.pop('next_command',None)
+    if command_type in ('create_cable_paths', 'create_distributors', 'create_stage_deck_grid') and result.get('requires_verification') and not result.get('error'):
+        verify_command = {'create_cable_paths':'get_cable_path_verification', 'create_distributors':'get_distributor_verification',
+                          'create_stage_deck_grid':'get_stage_deck_verification'}[command_type]
+        followup = {'expected_document': params['expected_document'], 'created': result['created']}
+        try:
+            final = connection.send_command(verify_command, followup)
+        except Exception as exc:
+            final = {'error': str(exc)}
+        result['verification'] = final
+        if final.get('error') or not final.get('verified'):
+            result.update(status='error', error='Objects created; verification incomplete. Do not recreate them.',
+                          retry_safe=False, recovery_command=verify_command, recovery_params=followup)
+        else:
+            result['requires_verification'] = False
+            result.pop('next_command', None)
+    if command_type == 'create_native_objects' and result.get('requires_finalization') and not result.get('error'):
+        followup = {'expected_document': params['expected_document'], 'created': result['created']}
+        final = connection.send_command('finalize_native_objects', followup)
+        result['finalization'] = final
+        if final.get('error'):
+            result.update(status='error', error='Objects created; finalization incomplete. Do not recreate them.',
+                          retry_safe=False, recovery_command='finalize_native_objects', recovery_params=followup,
+                          recovery_note='Poll any CID in finalization before recovery; never repeat creation.')
+        else:
+            result['requires_finalization'] = False
+            result.pop('next_command', None)
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
 
 @asynccontextmanager
@@ -473,7 +556,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
 
 
 mcp = FastMCP(
-    "vwx-mcp",
+    "Velvet Mirror Vectorworks",
     instructions=(
         "Drives a LIVE Vectorworks desktop session — the user's open drawing, "
         "edited in place. Search these tools for anything about: CAD or BIM "
@@ -493,7 +576,7 @@ mcp = FastMCP(
         "Speed: `vwx_batch` runs many commands in ONE round-trip — each "
         "separate call costs a fixed bridge crossing, so batch aggressively.\n"
         "Accuracy: call `vs_signature(name)` BEFORE writing an execute_script "
-        "body. The index carries exact signatures for all 3071 vs.* functions, "
+        "body. The index carries SDK signatures plus verified scripting-reference additions, "
         "so a script runs right the first time instead of tripping a VW engine "
         "error on arity.\n"
         "Bulk work goes through criteria strings — criteria_count / "
@@ -577,6 +660,16 @@ _MAX_RESULT_CHARS = {
 
 READONLY_TOOLS = set()      # filled by vtool() as tools register
 
+# Semantically read-only, but dynamic VS functions need the genuine menu
+# scripting context. OnIdle returned "list has no attribute CallDynVSFunction"
+# for Spotlight inspection, and silently dropped GetFPathName in document info.
+_MENU_CONTEXT_READS = {'get_distributor_inspection', 'get_distributor_verification', 'get_entertainment_state', 'get_native_schema', 'get_lighting_patch_audit', 'get_data_sheet_inspection', 'get_viewport_display', 'get_viewport_documentation', 'get_cable_inspection', 'get_cable_path_verification', 'get_cable_connector_catalog', 'get_electrical_components',
+                       'list_native_library_resources', 'get_document_info', 'get_cable_part_symbols',
+                       'get_cable_sections', 'get_cable_section_verification', 'get_cable_length_audit',
+                       'get_stage_deck_inspection', 'get_stage_deck_verification',
+                       'get_lighting_documentation', 'get_lighting_documentation_verification',
+                       'get_lighting_gdtf', 'get_gdtf_assignment_verification', 'get_sheet_paperwork_audit'}
+
 
 def _is_readonly(name):
     return name in _RO_NAMES or name.startswith(_RO_PREFIXES)
@@ -596,7 +689,8 @@ def vtool(fn=None, **kwargs):
     def deco(f):
         name = f.__name__
         kwargs.setdefault("output_schema", None)
-        kwargs.setdefault("timeout", VWX_CALL_TIMEOUT)   # native fastmcp 3.x per-tool timeout
+        # Equipment creation deliberately crosses two native scripting events.
+        kwargs.setdefault("timeout", 2 * VWX_CALL_TIMEOUT + 5 if name in ('create_native_objects', 'create_cable_paths', 'create_distributors', 'create_stage_deck_grid', 'set_lighting_documentation', 'number_lighting_devices', 'assign_gdtf_file', 'vwx') else VWX_CALL_TIMEOUT)
         if VWX_TASKS and _TASKS_AVAILABLE and name in _TASK_TOOLS:
             kwargs.setdefault("task", True)              # opt-in MCP Tasks for long-running tools
         tag = TOOL_TAGS.get(name)
@@ -648,9 +742,9 @@ def _export_readonly_manifest():
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + '.tmp'
         with open(tmp, 'w', encoding='utf-8') as fh:
-            json.dump(sorted(READONLY_TOOLS), fh)
+            json.dump(sorted(READONLY_TOOLS - _MENU_CONTEXT_READS), fh)
         os.replace(tmp, path)
-        logger.info(f"exported {len(READONLY_TOOLS)} read-only tool names to {path}")
+        logger.info(f"exported {len(READONLY_TOOLS - _MENU_CONTEXT_READS)} background-safe read tool names to {path}")
     except Exception as e:
         logger.warning(f"could not export the read-only manifest: {e}")
 
@@ -2214,12 +2308,12 @@ def set_pio_parameter(ctx: Context, object_id: str, field: str, value: Any) -> s
 
 @vtool
 def create_linear_dimension(ctx: Context, x1: float, y1: float, x2: float, y2: float,
-                            offset: float = 0, dim_type: int = 771,
+                            offset: float = 0, dim_type: int = 4,
                             associate_to: str = None, zero_text_perp: bool = False,
                             layer: str = None) -> str:
     """Linear dim between (x1,y1) and (x2,y2).
-    Gotcha: offset is text offset ALONG the dim line, not perpendicular.
-    Pass zero_text_perp=True to center text on the dim line (sets OV 43 = 0).
+    Offset is perpendicular to the dimension line. dim_type:0 horizontal,1 vertical,4 aligned.
+    Legacy MCP enum values771/772/773 remain accepted for compatibility.
     associate_to: UUID to bind dim to an object via AssociateLinearDimension."""
     p = {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "offset": offset,
          "dim_type": dim_type, "zero_text_perp": zero_text_perp}
@@ -2527,7 +2621,13 @@ def _vw_windows():
         u32.GetWindowRect(hwnd, ctypes.byref(rect))
         area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
         entry = (hwnd, buf.value, area)
-        (dialogs if u32.GetWindow(hwnd, 4) else doc).append(entry)   # GW_OWNER
+        owner = u32.GetWindow(hwnd, 4)  # GW_OWNER
+        if owner:
+            # Floating palettes are owned, but do not disable their owner.
+            if not u32.IsWindowEnabled(owner):
+                dialogs.append(entry)
+        else:
+            doc.append(entry)
         return True
 
     u32.EnumWindows(_cb, 0)
@@ -2977,6 +3077,10 @@ def _install_middleware():
                         f"tools (ttl {VWX_CACHE_TTL}s)")
         except Exception as e:
             logger.warning(f"response caching unavailable: {e}")
+
+
+from entertainment_tools import register as _register_entertainment_tools
+_register_entertainment_tools(vtool, cmd)
 
 
 def main():

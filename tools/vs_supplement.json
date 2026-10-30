@@ -1,0 +1,98 @@
+{
+  "GetCableBreakData": {
+    "args": [
+      "hObj",
+      "DataSelector",
+      "BreakIndex"
+    ],
+    "arity": 3,
+    "required": 3,
+    "ret": "STRING",
+    "cat": "Objects - Cables",
+    "doc": "Get cable break data. Data selectors - 'Name'. If the function is called on a cable break subpart the break index is ignored. If the function is called on a cable object you have to specify the break index.",
+    "source": "https://github.com/Vectorworks/developer-scripting/blob/main/Function%20Reference/Functions/GetCableBreakData.md",
+    "availability": "2025.4"
+  },
+  "GetCableBreaksCnt": {
+    "args": [
+      "hObj"
+    ],
+    "arity": 1,
+    "required": 1,
+    "ret": "INTEGER",
+    "cat": "Objects - Cables",
+    "doc": "Get the count of cable breaks in the cable.",
+    "source": "https://github.com/Vectorworks/developer-scripting/blob/main/Function%20Reference/Functions/GetCableBreaksCnt.md",
+    "availability": "2025.4"
+  },
+  "GetCablePartsCnt": {
+    "args": [
+      "hObj",
+      "SectionIndex"
+    ],
+    "arity": 2,
+    "required": 2,
+    "ret": "INTEGER",
+    "cat": "Objects - Cables",
+    "doc": "Get the count of cable parts in the cable or cable section. If SectionIndex is set to 0 it will be ignored.",
+    "source": "https://github.com/Vectorworks/developer-scripting/blob/main/Function%20Reference/Functions/GetCablePartsCnt.md",
+    "availability": "2025.4"
+  },
+  "GetCableSectionData": {
+    "args": [
+      "hObj",
+      "DataSelector",
+      "SectionIndex",
+      "PartIndex"
+    ],
+    "arity": 4,
+    "required": 4,
+    "ret": "STRING",
+    "cat": "Objects - Cables",
+    "doc": "Get cable section data. Data selectors - 'Name', 'Parts Ordered', 'Length', 'Start Slack', 'End Slack', 'Swag', 'Total Vertical Drop'. 'Parts Ordered', 'Length' and 'Total Vertical Drop' are read only. If the function is called on a cable section subpart the section index is ignored. If the function is called on a cable object you have to specify the section index. Optionally, for 'Parts Ordered' you can specify part index which to display, or 0 to ignore this argument.",
+    "source": "https://github.com/Vectorworks/developer-scripting/blob/main/Function%20Reference/Functions/GetCableSectionData.md",
+    "availability": "2025.4"
+  },
+  "GetCableSectionsCnt": {
+    "args": [
+      "hObj"
+    ],
+    "arity": 1,
+    "required": 1,
+    "ret": "INTEGER",
+    "cat": "Objects - Cables",
+    "doc": "Get the count of cable sections in the cable.",
+    "source": "https://github.com/Vectorworks/developer-scripting/blob/main/Function%20Reference/Functions/GetCableSectionsCnt.md",
+    "availability": "2025.4"
+  },
+  "SetCableBreakData": {
+    "args": [
+      "hObj",
+      "DataSelector",
+      "BreakIndex",
+      "Value"
+    ],
+    "arity": 4,
+    "required": 4,
+    "ret": "",
+    "cat": "Objects - Cables",
+    "doc": "Set cable break data. Data selectors - 'Name'. If the function is called on a cable break subpart the break index is ignored. If the function is called on a cable object you have to specify the break index.",
+    "source": "https://github.com/Vectorworks/developer-scripting/blob/main/Function%20Reference/Functions/SetCableBreakData.md",
+    "availability": "2025.4"
+  },
+  "SetCableSectionData": {
+    "args": [
+      "hObj",
+      "DataSelector",
+      "SectionIndex",
+      "Value"
+    ],
+    "arity": 4,
+    "required": 4,
+    "ret": "",
+    "cat": "Objects - Cables",
+    "doc": "Set cable section data. Data selectors - 'Name', 'Parts Ordered', 'Length', 'Start Slack', 'End Slack', 'Swag', 'Total Vertical Drop'. 'Parts Ordered', 'Length' and 'Total Vertical Drop' are read only. If the function is called on a cable section subpart the section index is ignored. If the function is called on a cable object you have to specify the section index.",
+    "source": "https://github.com/Vectorworks/developer-scripting/blob/main/Function%20Reference/Functions/SetCableSectionData.md",
+    "availability": "2025.4"
+  }
+}

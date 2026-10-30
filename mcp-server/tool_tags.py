@@ -292,9 +292,30 @@ TOOL_TAGS = {
     "get_object_variable": "escape",
 }
 
+TOOL_TAGS.update({name: 'entertainment' for name in (
+    'get_sheet_paperwork_audit',
+    'get_gdtf_file', 'get_mvr_gdtf_audit', 'get_lighting_gdtf', 'assign_gdtf_file', 'export_lighting_gdtf',
+    'get_lighting_documentation', 'set_lighting_documentation', 'number_lighting_devices',
+    'create_stage_deck_grid', 'get_stage_deck_inspection',
+    'get_cable_part_symbols', 'create_cable_part_symbols', 'export_cable_part_library', 'set_cable_part_availability',
+    'get_cable_sections', 'set_cable_sections', 'get_cable_length_audit',
+    'get_cable_parts_catalog',
+    'get_cable_connector_catalog',
+    'get_electrical_components',
+    'create_cable_paths', 'get_cable_inspection', 'create_distributors', 'get_distributor_inspection',
+    'get_entertainment_state', 'get_native_schema', 'get_bridge_job_status', 'get_lighting_patch_audit', 'get_data_sheet_inspection', 'get_viewport_display', 'get_viewport_documentation',
+    'ensure_drawing_structure', 'list_native_library_resources', 'import_native_resources', 'create_native_objects',
+    'set_lighting_accessories', 'set_lighting_sources', 'create_truss_position',
+    'attach_loads_to_position', 'set_fixture_label_layout', 'upsert_database_worksheet',
+    'place_shared_worksheet', 'update_title_block_data', 'create_sheet_viewport',
+    'annotate_viewport', 'save_document_checked', 'export_sheet_set_checked',
+)})
+
 # workflow presets -> set of tags to enable (only=True). "full" = no filtering.
 PRESETS = {
     "full": None,  # sentinel: enable everything
+    "entertainment": {"entertainment", "document", "layers", "classes", "query",
+                      "symbols", "records", "worksheets", "view", "io", "escape"},
     "gis": {"query", "layers", "classes", "appearance", "io", "geo",
             "records", "document", "escape"},
     # 'escape' carries the three access layers themselves — vwx, vwx_batch,
